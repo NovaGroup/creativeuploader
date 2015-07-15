@@ -6,78 +6,42 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/facebookgo/grace/gracehttp"
-	"github.com/julienschmidt/httprouter"
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"net/http"
 	"strings"
+	"flag"
 	"time"
+
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+
+	"github.com/facebookgo/grace/gracehttp"
+	"github.com/julienschmidt/httprouter"
 )
 
-const bind = "0.0.0.0:5241"
+type Creative struct {
+	Name     string `json:"name"`
+	Content  string `json:"content"`
+	FileSize int64  `json:"filesize"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	Mime     string `json:"mime"`
+}
 
 func upload(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	type Creative struct {
-		Name     string `json:"name"`
-		Content  string `json:"content"`
-		FileSize int64  `json:"filesize"`
-		Width    int    `json:"width"`
-		Height   int    `json:"height"`
-		Mime     string `json:"mime"`
-	}
 
 	var response struct {
 		Files []Creative `json:"files"`
 		Error string     `json:"error"`
 	}
 
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		response.Error = "No file parameter in POST request"
+	if files, err := parseUpload(w, r); err != nil {
+		response.Error = fmt.Sprint(err)
 	} else {
-		defer file.Close()
-
-		base64Buffer := bytes.Buffer{}
-		base64Writer := base64.NewEncoder(base64.StdEncoding, &base64Buffer)
-
-		size, _ := io.Copy(base64Writer, file)
-		if err := base64Writer.Close(); err != nil {
-			response.Error = "Error reading file: " + err.Error()
-		} else {
-			if strings.ToLower(header.Filename[len(header.Filename)-4:]) == ".zip" {
-				if _, err := file.Seek(0, 0); err != nil {
-					response.Error = err.Error()
-				} else {
-					z, err := zip.NewReader(file, size)
-					if err != nil {
-						response.Error = "Could not read ZIP file: " + err.Error()
-					} else {
-						for _, f := range z.File {
-							if zipped, err := f.Open(); err != nil {
-								response.Error = "Could not open file in ZIP: " + err.Error()
-							} else {
-								defer zipped.Close()
-								w, h, mime := getImageInfo(zipped)
-								base64Buffer.Reset()
-								size, _ := io.Copy(base64Writer, zipped)
-								base64Writer.Close()
-								response.Files = append(response.Files, Creative{f.Name, base64Buffer.String(), size, w, h, mime})
-							}
-						}
-					}
-				}
-			} else {
-				file.Seek(0, 0) // Seek to begin
-				w, h, mime := getImageInfo(file)
-				response.Files = append(response.Files, Creative{header.Filename, base64Buffer.String(), size, w, h, mime})
-			}
-		}
+		response.Files = files
 	}
 
 	iframe := ps.ByName("iframe")
@@ -101,6 +65,67 @@ func upload(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	}
 }
 
+func parseUpload(w http.ResponseWriter, r *http.Request) ([]Creative, error) {
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	base64Buffer := bytes.Buffer{}
+	base64Writer := base64.NewEncoder(base64.StdEncoding, &base64Buffer)
+
+	size, _ := io.Copy(base64Writer, file)
+	if err := base64Writer.Close(); err != nil {
+		return nil, fmt.Errorf("Error reading file: %v", err)
+	}
+
+	files := make([]Creative, 0)
+
+	if strings.ToLower(header.Filename[len(header.Filename)-4:]) == ".zip" {
+		if _, err := file.Seek(0, 0); err != nil {
+			return nil, err
+		}
+
+		z, err := zip.NewReader(file, size)
+		if err != nil {
+			return nil, fmt.Errorf("Could not read ZIP file: %v", err)
+		}
+
+		for _, f := range z.File {
+			zipped, err := f.Open()
+			if err != nil {
+				return nil, fmt.Errorf("Could not open file in ZIP: %v", err)
+			}
+			defer zipped.Close()
+
+			w, h, mime := getImageInfo(zipped)
+
+			base64Buffer.Reset()
+
+			size, err := io.Copy(base64Writer, zipped)
+			if err != nil {
+				return nil, fmt.Errorf("Could not read ZIP: %v", err)
+			}
+
+			if err := base64Writer.Close(); err != nil {
+				return nil, fmt.Errorf("COuld not finish ZIP: %v", err)
+			}
+
+			files = append(files, Creative{f.Name, base64Buffer.String(), size, w, h, mime})
+		}
+	} else {
+		if _, err := file.Seek(0, 0); err != nil { // Seek to begin
+			return nil, err
+		}
+
+		w, h, mime := getImageInfo(file)
+		files = append(files, Creative{header.Filename, base64Buffer.String(), size, w, h, mime})
+	}
+
+	return files, nil
+}
+
 func getImageInfo(file io.Reader) (int, int, string) {
 	img, mime, err := image.DecodeConfig(file)
 
@@ -111,21 +136,26 @@ func getImageInfo(file io.Reader) (int, int, string) {
 	return img.Width, img.Height, "image/" + mime
 }
 
-func emptypage(w http.ResponseWriter, r *http.Request) {
+type notFound struct {
+	http.Handler
+}
+
+func (n notFound) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Not a valid request: %s %s", r.Method, r.URL.Path)
 }
 
 func main() {
-	fmt.Println("Starting web server")
+	bind := flag.String("bind", "0.0.0.0:5241", "Bind to this IP:port combination")
+	flag.Parse()
 
 	// Set routes
 	router := httprouter.New()
 	router.HandleMethodNotAllowed = false
 	router.POST("/upload", upload)
-	router.NotFound = emptypage
+	router.NotFound = notFound{}
 
 	s := &http.Server{
-		Addr:           bind,
+		Addr:           *bind,
 		Handler:        router,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
