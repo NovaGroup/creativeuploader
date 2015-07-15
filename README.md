@@ -2,13 +2,12 @@
 
 This is a web service built in [Go] that returns JSON-encoded data of image file uploads. The images are creative files (banners) in JPG,GIF or PNG format (SWF to be added later on). ZIP files (containing images) are supported as well.
 
-##### Setup / run
- - Edit [creativeuploader.go] and edit the ``const bind`` value
- - Run: ``go run creativeuploader.go``
+##### Running
+ - ``go run creativeuploader.go --bind=0.0.0.0:1234``
 
 ##### Usage
   - Upload the files to the web service, use the ``file`` parameter
-  - Command line sample: ``curl http://www.atomx.com:5241/upload -i -F file=@~/image.gif``
+  - Command line sample: ``curl http://localhost:1234/upload -i -F file=@~/image.gif``
   - Sample output:
 ```
 {"files":[{"name":"image.gif","content":"PxNLUi/y......","filesize":12345,"width":300,"height":250,"mime":"image/gif"}],"error":""}

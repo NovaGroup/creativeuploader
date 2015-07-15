@@ -5,12 +5,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"image"
 	"io"
 	"net/http"
 	"strings"
-	"flag"
 	"time"
 
 	_ "image/gif"
