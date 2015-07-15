@@ -109,7 +109,7 @@ func parseUpload(w http.ResponseWriter, r *http.Request) ([]Creative, error) {
 			}
 
 			if err := base64Writer.Close(); err != nil {
-				return nil, fmt.Errorf("COuld not finish ZIP: %v", err)
+				return nil, fmt.Errorf("Could not finish ZIP: %v", err)
 			}
 
 			files = append(files, Creative{f.Name, base64Buffer.String(), size, w, h, mime})
